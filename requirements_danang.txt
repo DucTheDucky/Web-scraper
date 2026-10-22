@@ -1,8 +1,10 @@
-# HTTP mode: versions actually used by the Task 5 validation environment.
+# HTML parsing dependencies retained from the original Task 11 package.
 beautifulsoup4==4.15.0
 soupsieve==3.0.3
 typing_extensions==4.16.0
-# Optional browser mode is NOT needed for HTTP tests/default operation.
-# Install separately if required: python -m pip install "playwright==1.63.0"
-# Edge installed: use --fetcher playwright --browser-channel msedge (no browser download).
-# Bundled Chromium: python -m playwright install chromium
+# Default browser mode uses installed Microsoft Edge, with no browser download.
+playwright==1.63.0
+# For --browser-channel chromium: python -m playwright install chromium
+
+# SQL Server connector (requires an installed SQL Server ODBC driver).
+pyodbc>=5,<6
