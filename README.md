@@ -116,4 +116,8 @@ A previous local run produced 100 distinct listings with 27 CSV columns. That re
 - Website layout changes can break parsing. The scraper stops on detected CAPTCHA or access blocks.
 - The current repository does not include an automated test suite.
 
+## Acknowledgments
+
+OpenAI Codex assisted with code explanations, review,
+and README preparation.
 This is a coursework project in progress. Keep source URLs with the data and check the website's applicable terms before collecting or sharing its content.
