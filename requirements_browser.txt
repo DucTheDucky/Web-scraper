@@ -1,0 +1,2 @@
+-r requirements_danang.txt
+playwright==1.63.0
