@@ -400,6 +400,25 @@ class SqlServerStore:
                            utc_now(), self.run_id, expected)
         return True
 
+    def save_refreshed_property(self, row, expected_post_id):
+        """Save a direct refresh atomically without changing crawl queues or snapshots."""
+        valid_url(row.get('URL', ''))
+        match = PRODUCT_PATH_RE.search(urlsplit(row['URL']).path)
+        if (not match or match[1] != str(expected_post_id)
+                or clean(row.get('Post_ID')) != str(expected_post_id)):
+            raise ValueError('The refresh URL and Post_ID must identify the same property.')
+        if not row.get('Scraped_At'):
+            raise ValueError('Scraped_At is required for a refresh.')
+
+        with self._transaction() as cursor:
+            conflict = cursor.execute(
+                'SELECT 1 FROM dbo.listings WHERE source_url=? AND post_id<>?',
+                row['URL'], str(expected_post_id)).fetchone()
+            if conflict:
+                raise ValueError('This URL already belongs to another Post_ID.')
+            listing_id = save_property(cursor, row)
+        return listing_id
+
     def reset_failed(self, max_attempts=3):
         if not isinstance(max_attempts, int) or max_attempts < 0:
             raise ValueError('max_attempts must be a nonnegative integer.')
@@ -407,7 +426,7 @@ class SqlServerStore:
             cursor.execute("UPDATE dbo.crawl_queue SET status='pending',updated_at=? "
                            "WHERE run_id=? AND status='failed' AND attempts<?", utc_now(), self.run_id, max_attempts)
             return cursor.rowcount
-
+    
     def count(self, status):
         return self._one('SELECT COUNT(*) AS n FROM dbo.crawl_queue WHERE run_id=? AND status=?',
                          self.run_id, status)['n']

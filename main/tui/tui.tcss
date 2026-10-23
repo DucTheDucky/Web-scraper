@@ -1,0 +1,28 @@
+Screen {
+    align: center bottom;
+    background: ansi_default;
+}
+
+#table-panel {
+    width: 80%;
+    max-width: 120;
+    height: 12;
+    border: round $accent;
+    padding: 1;
+}
+
+#table-title {
+    height: 1;
+    margin-bottom: 1;
+    text-style: bold;
+}
+
+#property-table {
+    height: 1fr;
+}
+
+
+#table-panel,
+#property-table {
+    background: ansi_default;
+}

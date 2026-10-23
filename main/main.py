@@ -1272,7 +1272,7 @@ class Crawler:
 
 
 
-def run(store, crawler, max_pages=0, max_items=0, keep_contact_name=True, log=print):
+def run(store, crawler, max_pages=100, max_items=100, keep_contact_name=True, log=print):
     """Return (stop reason, invocation statistics). Limits include all completed work in this run; 0 means unlimited."""
     stats = {'pages': 0, 'found': 0, 'ok': 0, 'skipped': 0, 'errors': 0}
 
@@ -1387,9 +1387,9 @@ def build_parser():
     parser.add_argument('--database', default=DEFAULT_DATABASE, help='existing SQL Server database (default: %(default)s)')
     parser.add_argument('--driver', default=DEFAULT_DRIVER, help='installed ODBC driver (default: %(default)s)')
     parser.add_argument('--list-url', help=f'results-page URL (new-run default: {DEFAULT_LIST_URL})')
-    parser.add_argument('--max-pages', type=nonneg_int, default=2,
+    parser.add_argument('--max-pages', type=nonneg_int, default=10,
                         help='total completed list pages in this run, including resumed work (0 = unlimited; default: 2)')
-    parser.add_argument('--max-items', type=nonneg_int, default=20,
+    parser.add_argument('--max-items', type=nonneg_int, default=100,
                         help='total successful properties in this run, including resumed work (0 = unlimited; default: 20)')
     parser.add_argument('--delay', type=delay_value, default=MIN_DELAY, help='seconds between HTML request starts; minimum 10')
     mode = parser.add_mutually_exclusive_group()
@@ -1397,6 +1397,7 @@ def build_parser():
     mode.add_argument('--resume', type=run_id_value, metavar='RUN_ID', help='resume the saved SQL Server run with this UUID')
     mode.add_argument('--runs', action='store_true', help='show the latest 20 runs without accessing the website')
     mode.add_argument('--check-db', action='store_true', help='connect and prepare/check the schema without accessing the website')
+    mode.add_argument( '--refresh-url',type=valid_url,metavar='URL',help='fetch one property directly and update or insert its SQL record')
     parser.add_argument('--fetcher', choices=('http', 'auto', 'playwright'), default='playwright',
                         help='browser loading (default), HTTP, or explicit-JavaScript browser fallback')
     parser.add_argument('--browser-channel', choices=('chromium', 'msedge', 'chrome'), default='msedge',
@@ -1409,6 +1410,9 @@ def build_parser():
     analytics.add_argument('--load-analytics-bootstrap', dest='skip_analytics_bootstrap', action='store_false',
                            help='load that analytics script for diagnostics; its errors may stop collection')
     return parser
+
+
+
 
 
 def main(argv=None):
@@ -1425,7 +1429,7 @@ def main(argv=None):
     code = 0
     reason = None
     try:
-        administrative = args.runs or args.check_db
+        administrative = args.runs or args.check_db or bool(args.refresh_url)
         list_url = args.list_url or (None if args.resume or administrative else DEFAULT_LIST_URL)
         store = SqlServerStore(server=args.server, database=args.database, driver=args.driver,
                                run_id=args.resume, list_url=list_url, create_run=not administrative)
@@ -1435,6 +1439,28 @@ def main(argv=None):
             for saved in store.runs():
                 print(f'{saved["run_id"]} | {saved["created_at"]} | saved={saved["done"]} | '
                       f'{saved["list_url"]} | {saved["last_stop_reason"] or "not recorded"}')
+        elif args.refresh_url:
+            http = HttpFetcher()
+            crawler = Crawler(http, Throttle(args.delay), mode=args.fetcher)
+
+            if args.fetcher != 'http':
+                crawler.browser = BrowserFetcher(crawler.robots_allows)
+                crawler.browser.channel = args.browser_channel
+                crawler.browser.skip_analytics_bootstrap = args.skip_analytics_bootstrap
+                crawler.browser.log = crawler.log
+
+            print(f'Refreshing: {args.refresh_url}')
+
+            row = refresh_property(
+                args.refresh_url, crawler, store, not args.no_contact_name
+            )
+
+            print(
+                f"Saved Post_ID={row['Post_ID']} | "
+                f"Price_Text={row['Price_Text']} | "
+                f"Price_VND={row['Price_VND']} | "
+                f"Price_Per_M2={row['Price_Per_M2']}"
+            )
         else:
             list_url = store.get_meta('list_url')
             valid_list_url(list_url)
@@ -1467,7 +1493,8 @@ def main(argv=None):
             code = 3 if reason.startswith('STOP:') else 0
     except KeyboardInterrupt:
         reason = 'Interrupted with Ctrl+C.'
-        print('Interrupted. Committed properties remain in SQL Server; resume using the run ID printed above.')
+        retry = 'Retry the same --refresh-url command.' if args.refresh_url else 'Resume using the run ID printed above.'
+        print(f'Interrupted. Committed properties remain in SQL Server. {retry}')
         code = 130
     except ValueError as error:
         reason = f'STOP: {error}'
@@ -1475,7 +1502,8 @@ def main(argv=None):
         code = 2
     except Exception as error:
         reason = f'STOP: {type(error).__name__}: {error}'
-        print(f'{reason}\nPreviously committed work remains in SQL Server. Retry using the same run ID.')
+        retry = 'Retry the same --refresh-url command.' if args.refresh_url else 'Retry using the same run ID.'
+        print(f'{reason}\nPreviously committed work remains in SQL Server. {retry}')
         code = 3
     finally:
         resource = crawler if crawler is not None else http
@@ -1503,6 +1531,45 @@ def main(argv=None):
                         code = 3
     return code
 
+def refresh_property(url, crawler, store, keep_contact_name=True):
+    valid_url(url)
+    match = PRODUCT_PATH_RE.search(urlsplit(url).path)
 
+    if match is None:
+        raise ValueError('Enter a property URL ending in -pr followed by its Post_ID.')
+
+    expected_post_id = match[1]
+
+    row = crawler.fetch_parse(
+        url, 'detail',
+        lambda response: parse_detail_page(response.text, response.url)
+    )
+
+    if str(row.get('Post_ID')) != expected_post_id:
+        raise ParseError('The fetched property does not match the requested Post_ID.')
+
+    row['Scraped_At'] = utc_now()
+    row['Source_List_URL'] = None
+
+    if not keep_contact_name:
+        row['Contact_Name'] = ''
+
+    store.save_refreshed_property(row, expected_post_id)
+    return row
+
+def refresh_unit_price_properties(candidates, crawler, store):
+    for property in candidates:
+        try:
+            print(f"Refreshing Post_ID={property['Post_ID']}")
+
+            refresh_property(
+                property["URL"], crawler, store
+            )
+
+        except (BlockedError, RateLimitedError):
+            raise
+
+        except Exception as error:
+            print(f"Could not refresh {property['Post_ID']}: {error}")
 if __name__ == '__main__':
     sys.exit(main())
