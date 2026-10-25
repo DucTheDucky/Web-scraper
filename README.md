@@ -186,8 +186,8 @@ A controlled comparison with the same scraper request headers found:
 
 | Connection / fetcher | robots.txt | Listing page |
 | --- | --- | --- |
-| Australian VPN, HTTP | Cloudflare challenge / 403 | Cloudflare challenge / 403 |
-| Australian VPN, existing Edge fetcher | Cloudflare challenge / 403 | Not attempted by the crawler |
+| VPN, HTTP | Cloudflare challenge / 403 | Cloudflare challenge / 403 |
+| VPN, existing Edge fetcher | Cloudflare challenge / 403 | Not attempted by the crawler |
 | VPN disconnected, HTTP | 200 text/plain; selected list allowed | Cloudflare challenge / 403 |
 | VPN disconnected, existing Edge fetcher | Loaded successfully | Parsed successfully; one detail saved |
 
