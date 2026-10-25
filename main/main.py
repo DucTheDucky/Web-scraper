@@ -202,7 +202,8 @@ def parse_detail_page(html_content, page_url):
     info = {}
     total_price_text = ''
     unit_price_text = ''
-    price_labels = ('mức giá', 'khoảng giá', 'giá')
+    total_price_label = unit_price_label = ''
+    price_labels = ('mức giá', 'khoảng giá', 'giá', 'giá dự kiến')
     for item in root.select('.re__pr-short-info-item, .re__pr-specs-content-item'):
         label = get_text(item, '.title, .re__pr-specs-content-item-title').lower()
         value = get_text(item, '.value, .re__pr-specs-content-item-value')
@@ -210,13 +211,16 @@ def parse_detail_page(html_content, page_url):
         if label in price_labels:
             if re.search(r'/\s*m[²2]', value, re.I):
                 unit_price_text = value
+                unit_price_label = label
             elif value and not total_price_text:
                 total_price_text = value
+                total_price_label = label
 
             # Use the supplementary unit price only as a fallback.
             extra = get_text(item, '.ext')
             if not unit_price_text and re.search(r'/\s*m[²2]', extra, re.I):
                 unit_price_text = extra
+                unit_price_label = label
         elif label and value:
             info[label] = value
 
@@ -231,6 +235,10 @@ def parse_detail_page(html_content, page_url):
         price_per_m2 = round_vnd(Decimal(price_vnd) / Decimal(str(area)))
         price_source = 'calculated'
     period = re.search(r'(?:/\s*|mỗi\s+)(tháng|năm|ngày|tuần)', price_text, re.I)
+    # Preserve the website's forecast qualifier without changing numeric conversion.
+    selected_price_label = total_price_label if total_price_text else unit_price_label
+    if selected_price_label == 'giá dự kiến':
+        price_text = f'Giá dự kiến: {price_text}'
 
     address = get_text(root, '.re__ldp-address .re__address, .re__pr-address, .re__address')
     # Parse the primary address, excluding parenthesized alternatives; preserve the raw address.
