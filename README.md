@@ -12,6 +12,10 @@ Results page -> discover links -> SQL Server queue
 
 No CSV, SQLite, JSON sidecar, issues CSV, or diagnostic HTML data files are created. Existing files from the earlier version are left untouched and are not automatically imported.
 
+## TUI (work in progress)
+
+The Textual TUI is a **work in progress (WIP)**. Its interface and scrape controls are still being developed. Use the command-line scraper for collection, resuming runs, and refreshing properties.
+
 ## Features
 
 - Collect many properties in a single run, with per-property commits.
@@ -182,8 +186,8 @@ A controlled comparison with the same scraper request headers found:
 
 | Connection / fetcher | robots.txt | Listing page |
 | --- | --- | --- |
-| Australian VPN, HTTP | Cloudflare challenge / 403 | Cloudflare challenge / 403 |
-| Australian VPN, existing Edge fetcher | Cloudflare challenge / 403 | Not attempted by the crawler |
+| VPN, HTTP | Cloudflare challenge / 403 | Cloudflare challenge / 403 |
+| VPN, existing Edge fetcher | Cloudflare challenge / 403 | Not attempted by the crawler |
 | VPN disconnected, HTTP | 200 text/plain; selected list allowed | Cloudflare challenge / 403 |
 | VPN disconnected, existing Edge fetcher | Loaded successfully | Parsed successfully; one detail saved |
 

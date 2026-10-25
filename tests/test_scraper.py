@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'main'))
@@ -84,6 +84,52 @@ class ParserTests(unittest.TestCase):
                 self.assertEqual(parsed['Price_VND'], 3500000000)
                 self.assertEqual(parsed['Price_Per_M2'], 35000000)
                 self.assertEqual(parsed['Price_Per_M2_Source'], 'displayed')
+
+    def test_estimated_total_and_unit_price_preserve_both_values_and_qualifier(self):
+        html = detail().replace('Mức giá', 'Giá dự kiến').replace('3 tỷ 950 triệu', '2,34 tỷ')
+        html = html.replace('<span class="value">2,34 tỷ</span>',
+                            '<span class="value">2,34 tỷ</span><span class="ext">~65 triệu/m²</span>')
+        html = html.replace('100 m²', '36 m²')
+        specification = ('<div class="re__pr-specs-content-item">'
+                         '<span class="re__pr-specs-content-item-title">Khoảng giá</span>'
+                         '<span class="re__pr-specs-content-item-value">65 triệu/m²</span></div>')
+        fixtures = (
+            html.replace('</h1>', '</h1>' + specification),
+            html.replace('</div><div class="re__contact-name"',
+                         specification + '</div><div class="re__contact-name"'),
+        )
+        for position, fixture in enumerate(fixtures):
+            with self.subTest(specification_position=position):
+                parsed = scraper.parse_detail_page(fixture, url('900000001'))
+                self.assertEqual(parsed['Price_Text'], 'Giá dự kiến: 2,34 tỷ')
+                self.assertEqual(parsed['Price_VND'], 2340000000)
+                self.assertEqual(parsed['Price_Per_M2'], 65000000)
+                self.assertEqual(parsed['Price_Per_M2_Source'], 'displayed')
+                self.assertEqual(parsed['Area'], 36)
+
+    def test_estimated_unit_only_keeps_total_unknown(self):
+        html = detail().replace('Mức giá', 'Giá dự kiến').replace('3 tỷ 950 triệu', '65 triệu/m²')
+        parsed = scraper.parse_detail_page(html, url('900000001'))
+        self.assertEqual(parsed['Price_Text'], 'Giá dự kiến: 65 triệu/m²')
+        self.assertIsNone(parsed['Price_VND'])
+        self.assertEqual(parsed['Price_Per_M2'], 65000000)
+
+    def test_estimated_total_still_allows_calculated_unit_price(self):
+        html = detail().replace('Mức giá', 'Giá dự kiến').replace('3 tỷ 950 triệu', '2,34 tỷ')
+        parsed = scraper.parse_detail_page(html, url('900000001'))
+        self.assertEqual(parsed['Price_Text'], 'Giá dự kiến: 2,34 tỷ')
+        self.assertEqual(parsed['Price_VND'], 2340000000)
+        self.assertEqual(parsed['Price_Per_M2'], 23400000)
+        self.assertEqual(parsed['Price_Per_M2_Source'], 'calculated')
+
+    def test_estimated_label_does_not_make_ambiguous_amounts_exact(self):
+        for value in ('Thỏa thuận', 'khoảng 2 tỷ', '2-3 tỷ'):
+            with self.subTest(value=value):
+                html = detail().replace('Mức giá', 'Giá dự kiến').replace('3 tỷ 950 triệu', value)
+                parsed = scraper.parse_detail_page(html, url('900000001'))
+                self.assertEqual(parsed['Price_Text'], 'Giá dự kiến: ' + value)
+                self.assertIsNone(parsed['Price_VND'])
+                self.assertIsNone(parsed['Price_Per_M2'])
 
     def test_unit_price_only_does_not_require_total_price(self):
         parsed = scraper.parse_detail_page(detail().replace('3 tỷ 950 triệu', '35 triệu/m²'), url('900000001'))
@@ -214,6 +260,83 @@ class BrowserResponseTests(unittest.TestCase):
         self.assertIsInstance(browser._error, scraper.BlockedError)
 
 
+class RefreshTests(unittest.TestCase):
+    def test_refresh_parses_html_and_sets_audit_fields(self):
+        crawler, store = Mock(), Mock()
+        crawler.fetch_parse.side_effect = lambda address, kind, parser: parser(
+            scraper.Response(200, address, detail(), {}))
+        parsed = scraper.refresh_property(url('900000001'), crawler, store, False)
+        self.assertEqual(parsed['Price_VND'], 3950000000)
+        self.assertEqual(parsed['Contact_Name'], '')
+        self.assertIsNone(parsed['Source_List_URL'])
+        self.assertTrue(parsed['Scraped_At'])
+        store.save_refreshed_property.assert_called_once_with(parsed, '900000001')
+
+    def test_unsupported_or_non_property_url_never_fetches(self):
+        for address in ('https://example.com/test-pr900000001', LIST_URL):
+            with self.subTest(address=address):
+                crawler, store = Mock(), Mock()
+                with self.assertRaises(ValueError):
+                    scraper.refresh_property(address, crawler, store)
+                crawler.fetch_parse.assert_not_called()
+                store.save_refreshed_property.assert_not_called()
+
+    def test_wrong_post_id_never_saves(self):
+        crawler, store = Mock(), Mock()
+        crawler.fetch_parse.return_value = {'Post_ID': '2'}
+        with self.assertRaises(scraper.ParseError):
+            scraper.refresh_property(url('900000001'), crawler, store)
+        store.save_refreshed_property.assert_not_called()
+
+    def test_failed_fetch_never_saves(self):
+        crawler, store = Mock(), Mock()
+        crawler.fetch_parse.side_effect = scraper.BlockedError('Blocked')
+        with self.assertRaises(scraper.BlockedError):
+            scraper.refresh_property(url('900000001'), crawler, store)
+        store.save_refreshed_property.assert_not_called()
+
+    def test_cli_refresh_cannot_resume(self):
+        import contextlib
+        import io
+        address = url('900000001')
+        self.assertEqual(scraper.build_parser().parse_args(['--refresh-url', address]).refresh_url, address)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            scraper.build_parser().parse_args(['--refresh-url', address, '--resume', str(uuid.uuid4())])
+
+    def test_main_refresh_creates_no_run_and_closes_resources(self):
+        store, crawler = Mock(), Mock()
+        store.run_id = None
+        with patch.object(scraper, 'SqlServerStore', return_value=store) as factory, \
+                patch.object(scraper, 'Crawler', return_value=crawler), \
+                patch.object(scraper, 'BrowserFetcher'), \
+                patch.object(scraper, 'refresh_property', return_value=row()) as refresh, \
+                patch('builtins.print'):
+            self.assertEqual(scraper.main(['--refresh-url', url('900000001')]), 0)
+        self.assertFalse(factory.call_args.kwargs['create_run'])
+        self.assertIsNone(factory.call_args.kwargs['list_url'])
+        refresh.assert_called_once_with(url('900000001'), crawler, store, True)
+        crawler.close.assert_called_once()
+        store.close.assert_called_once()
+        store.finish.assert_not_called()
+
+    def test_main_refresh_failure_reports_url_retry_and_closes_resources(self):
+        import contextlib
+        import io
+        store, crawler = Mock(), Mock()
+        store.run_id = None
+        output = io.StringIO()
+        with patch.object(scraper, 'SqlServerStore', return_value=store), \
+                patch.object(scraper, 'Crawler', return_value=crawler), \
+                patch.object(scraper, 'BrowserFetcher'), \
+                patch.object(scraper, 'refresh_property', side_effect=RuntimeError('Save failed')), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(scraper.main(['--refresh-url', url('900000001')]), 3)
+        self.assertIn('Retry the same --refresh-url command.', output.getvalue())
+        self.assertNotIn('same run ID', output.getvalue())
+        crawler.close.assert_called_once()
+        store.close.assert_called_once()
+
+
 @unittest.skipUnless(os.environ.get('ADY_RUN_SQL_TESTS') == '1', 'set ADY_RUN_SQL_TESTS=1 for disposable SQL integration tests')
 class SqlServerTests(unittest.TestCase):
     @classmethod
@@ -254,6 +377,43 @@ class SqlServerTests(unittest.TestCase):
 
     def scalar(self, sql, *params):
         return next(iter(self.store._one(sql, *params).values()))
+
+    def test_direct_refresh_updates_inserts_and_rolls_back_without_changing_history(self):
+        item, parsed = self.queue()
+        self.assertTrue(self.store.save_listing(item, parsed))
+        post_id = parsed['Post_ID']
+        snapshot = list(self.store.listings())
+        original_id = self.scalar('SELECT listing_id FROM dbo.listings WHERE post_id=?', post_id)
+        refreshed = dict(parsed, Price_Text='3,5 tỷ', Price_VND=3500000000,
+                         Price_Per_M2=35000000, Source_List_URL=None)
+        self.assertEqual(self.store.save_refreshed_property(refreshed, post_id), original_id)
+        self.assertEqual(self.scalar('SELECT price_vnd FROM dbo.listings WHERE post_id=?', post_id), 3500000000)
+        self.assertEqual(self.store.count('done'), 1)
+        self.assertEqual(list(self.store.listings()), snapshot)
+
+        original_save = storage.save_property
+
+        def fail_after_write(cursor, value):
+            original_save(cursor, value)
+            raise RuntimeError('Refresh rollback fixture')
+
+        with patch.object(storage, 'save_property', side_effect=fail_after_write), self.assertRaises(RuntimeError):
+            self.store.save_refreshed_property(dict(refreshed, Price_VND=1), post_id)
+        self.assertEqual(self.scalar('SELECT price_vnd FROM dbo.listings WHERE post_id=?', post_id), 3500000000)
+        for invalid in (dict(refreshed, Post_ID='2'), dict(refreshed, URL=url('2')),
+                        dict(refreshed, Scraped_At=None)):
+            with self.assertRaises(ValueError):
+                self.store.save_refreshed_property(invalid, post_id)
+
+        run_count = self.scalar('SELECT COUNT(*) FROM dbo.crawl_runs')
+        queue_count = self.scalar('SELECT COUNT(*) FROM dbo.crawl_queue')
+        direct_store = self.new_store(create_run=False)
+        self.assertIsNone(direct_store.run_id)
+        inserted = row(str(uuid.uuid4().int)[:12])
+        direct_store.save_refreshed_property(inserted, inserted['Post_ID'])
+        self.assertIsNotNone(self.scalar('SELECT listing_id FROM dbo.listings WHERE post_id=?', inserted['Post_ID']))
+        self.assertEqual(self.scalar('SELECT COUNT(*) FROM dbo.crawl_runs'), run_count)
+        self.assertEqual(self.scalar('SELECT COUNT(*) FROM dbo.crawl_queue'), queue_count)
 
     def test_full_record_roundtrip_and_normalized_view(self):
         item, parsed = self.queue()
