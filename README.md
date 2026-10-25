@@ -12,6 +12,10 @@ Results page -> discover links -> SQL Server queue
 
 No CSV, SQLite, JSON sidecar, issues CSV, or diagnostic HTML data files are created. Existing files from the earlier version are left untouched and are not automatically imported.
 
+## TUI (work in progress)
+
+The Textual TUI is a **work in progress (WIP)**. Its interface and scrape controls are still being developed. Use the command-line scraper for collection, resuming runs, and refreshing properties.
+
 ## Features
 
 - Collect many properties in a single run, with per-property commits.

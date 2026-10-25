@@ -28,7 +28,11 @@ def read_properties():
     finally:
         connection.close()
 
+class ScrapeButton(App):
+    BINDINGS = [("q", "quit", "Quit")]
+    CSS_PATH = "tui.tcss"
 
+        
 class TableApp(App):
     BINDINGS = [("q", "quit", "Quit")]
     CSS_PATH = "tui.tcss"
